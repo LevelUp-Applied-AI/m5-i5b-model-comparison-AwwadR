@@ -337,6 +337,71 @@ def find_tree_vs_linear_disagreement(rf_model, lr_model, X_test, y_test,
         "true_label": int(y_test.iloc[max_idx])
     }
 
+def threshold_optimization_for_deployment(model, X_test, y_test,
+                                          output_csv="results/threshold_sweep.csv",
+                                          output_plot="results/threshold_sweep.png"):
+    """
+    Sweep thresholds from 0.10 to 0.90 and compute precision, recall, F1,
+    alerts per 1000 customers, and expected alerts for a base of 10,000 customers.
+
+    Select the threshold that stays within Petra Telecom's monthly contact
+    capacity (150 out of 10,000 customers) while maximizing recall.
+    """
+    thresholds = np.arange(0.10, 0.91, 0.05)
+    y_proba = model.predict_proba(X_test)[:, 1]
+
+    rows = []
+
+    for threshold in thresholds:
+        y_pred = (y_proba >= threshold).astype(int)
+
+        precision = precision_score(y_test, y_pred, zero_division=0)
+        recall = recall_score(y_test, y_pred, zero_division=0)
+        f1 = f1_score(y_test, y_pred, zero_division=0)
+
+        positive_rate = y_pred.mean()
+        alerts_per_1000 = positive_rate * 1000
+        alerts_per_10000 = positive_rate * 10000
+
+        rows.append({
+            "threshold": round(threshold, 2),
+            "precision": precision,
+            "recall": recall,
+            "f1": f1,
+            "alerts_per_1000": alerts_per_1000,
+            "alerts_per_10000": alerts_per_10000
+        })
+
+    threshold_df = pd.DataFrame(rows)
+    threshold_df.to_csv(output_csv, index=False)
+
+    # Capacity rule: at most 150 contacts for 10,000 customers
+    eligible = threshold_df[threshold_df["alerts_per_10000"] <= 150]
+
+    if len(eligible) > 0:
+        best_row = eligible.sort_values(
+            ["recall", "f1", "precision"],
+            ascending=[False, False, False]
+        ).iloc[0]
+    else:
+        best_row = None
+
+    # Plot threshold vs metrics
+    plt.figure(figsize=(10, 6))
+    plt.plot(threshold_df["threshold"], threshold_df["precision"], label="Precision")
+    plt.plot(threshold_df["threshold"], threshold_df["recall"], label="Recall")
+    plt.plot(threshold_df["threshold"], threshold_df["f1"], label="F1")
+    plt.plot(threshold_df["threshold"], threshold_df["alerts_per_1000"], label="Alerts per 1000")
+    plt.xlabel("Threshold")
+    plt.ylabel("Metric value")
+    plt.title("Threshold Sweep for RF_default")
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+    plt.savefig(output_plot, bbox_inches="tight")
+    plt.close()
+
+    return threshold_df, best_row
+
 def main():
     """Orchestrate all 9 integration tasks. Run with: python model_comparison.py"""
     os.makedirs("results", exist_ok=True)
@@ -435,6 +500,24 @@ def main():
     print("\n--- All results saved to results/ ---")
     print("Write your decision memo in the PR description (Task 10).")
 
+    # Tier 1 — Threshold Optimization for Deployment
+    print("\n=== Tier 1: Threshold Optimization for Deployment ===")
+    threshold_df, best_threshold_row = threshold_optimization_for_deployment(
+        fitted_models[best_name], X_test, y_test
+    )
+
+    print(threshold_df.to_string(index=False))
+
+    if best_threshold_row is not None:
+        print("\nRecommended threshold under business capacity:")
+        print(f"  Threshold: {best_threshold_row['threshold']:.2f}")
+        print(f"  Precision: {best_threshold_row['precision']:.4f}")
+        print(f"  Recall: {best_threshold_row['recall']:.4f}")
+        print(f"  F1: {best_threshold_row['f1']:.4f}")
+        print(f"  Alerts per 1000: {best_threshold_row['alerts_per_1000']:.2f}")
+        print(f"  Alerts per 10000: {best_threshold_row['alerts_per_10000']:.2f}")
+    else:
+        print("\nNo threshold met the 150-per-10,000 contact limit.")
 
 if __name__ == "__main__":
     main()

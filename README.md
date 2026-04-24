@@ -191,17 +191,6 @@ Other Gradient Boosting results:
 
 This shows the framework can add new model families through configuration and find better-performing models without changing the core pipeline logic.
 
-#### What the `experiments/` folder is for
-
-The `experiments/` folder stores outputs from Tier 3 runs in timestamped subfolders. Each run creates a new folder so that experiment results are reproducible and older runs are not overwritten.
-
-Typical files inside each experiment folder:
-- `comparison_table.csv`
-- `pr_curves.png`
-- `calibration.png`
-- `experiment_log.csv`
-- `best_model.joblib`
-- `config_used.json`
 
 #### How to add a new model family
 
@@ -216,16 +205,6 @@ To add a new model family, a teammate needs to:
    - `params` or `param_grid`
 
 This keeps the framework flexible and avoids rewriting the main pipeline when new models are added.
-
----
-
-## Submission
-
-For the base integration task, the PR description should include:
-
-1. the model comparison table
-2. a 3–4 paragraph decision memo recommending a model for Petra Telecom
-3. the PR URL pasted into TalentLMS
 
 ---
 

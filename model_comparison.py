@@ -35,6 +35,7 @@ from sklearn.model_selection import StratifiedKFold, train_test_split
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 from sklearn.tree import DecisionTreeClassifier
+from sklearn.inspection import permutation_importance
 
 
 NUMERIC_FEATURES = ["tenure", "monthly_charges", "total_charges",
@@ -402,6 +403,77 @@ def threshold_optimization_for_deployment(model, X_test, y_test,
 
     return threshold_df, best_row
 
+def permutation_importance_comparison(models, X_test, y_test, feature_names, output_path="results/permutation_importance.png"):
+    """
+    Compute premutation importance for top 3 models using test set,
+    Compare rankings, and save grouped bar chart for the top 8 features.
+    """
+    # Find top 3 models by PR-AUC on the best set
+    scores = []
+    for name, model in models.items():
+        y_proba = model.predict_proba(X_test)[:, 1]
+        pr_auc = average_precision_score(y_test, y_proba)
+        scores.append((name, pr_auc))
+    
+    top3 = sorted(scores, key=lambda x: x[1], reverse=True)[:3]
+    top3_names = [name for name, _ in top3]
+
+    importance_dict = {}
+
+    for name in top3_names:
+        result = permutation_importance(
+            models[name], 
+            X_test, y_test, 
+            n_repeats=10, 
+            random_state=42, 
+            scoring="average_precision"
+        )
+
+        importance_df = pd.DataFrame({
+            "feature": feature_names,
+            "importance_mean": result.importances_mean,
+            "importance_std": result.importances_std        
+        }).sort_values("importance_mean", ascending=False)
+
+        importance_dict[name] = importance_df
+    
+    # Get union of top 8 features across all 3 models
+    all_top_features = []
+    for name in top3_names:
+        all_top_features.extend(importance_dict[name]["feature"].head(8).tolist())
+    
+    top_features = list(dict.fromkeys(all_top_features))[:8]
+
+    plot_df = pd.DataFrame({"feature": top_features})
+
+    for name in top3_names:
+        plot_df = plot_df.merge(
+            importance_dict[name][["feature", "importance_mean"]],
+            on="feature",
+            how="left"
+        ).rename(columns={"importance_mean": name})
+    plot_df = plot_df.fillna(0)
+
+    # plot grouped bar chart
+    x = np.arange(len(plot_df))
+    width = 0.25
+
+    plt.figure(figsize=(12, 6))
+    plt.bar(x - width, plot_df[top3_names[0]], width=width, label=top3_names[0])
+    plt.bar(x, plot_df[top3_names[1]], width=width, label=top3_names[1])
+    plt.bar(x + width, plot_df[top3_names[2]], width=width, label=top3_names[2])
+    
+    plt.xticks(x, plot_df["feature"], rotation=45, ha="right")
+    plt.ylabel("Permutation Importance (mean drop in PR-AUC)")
+    plt.xlabel("Feature")
+    plt.title("Permutation Importance Comparison Across Top 3 Models")
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(output_path, bbox_inches="tight")
+    plt.close()
+
+    return top3_names, importance_dict, plot_df
+
 def main():
     """Orchestrate all 9 integration tasks. Run with: python model_comparison.py"""
     os.makedirs("results", exist_ok=True)
@@ -500,7 +572,7 @@ def main():
     print("\n--- All results saved to results/ ---")
     print("Write your decision memo in the PR description (Task 10).")
 
-    # Tier 1 — Threshold Optimization for Deployment
+    # Tier 1: Threshold Optimization for Deployment
     print("\n=== Tier 1: Threshold Optimization for Deployment ===")
     threshold_df, best_threshold_row = threshold_optimization_for_deployment(
         fitted_models[best_name], X_test, y_test
@@ -519,5 +591,19 @@ def main():
     else:
         print("\nNo threshold met the 150-per-10,000 contact limit.")
 
+    # Tier 2: Permutation Importance and Model Explanation
+    print("\n=== Tier 2: Permutation Importance and Model Explanation ===")
+    top3_names, importance_dict, plot_fd = permutation_importance_comparison(
+        fitted_models,
+        X_test,
+        y_test,
+        NUMERIC_FEATURES
+    )
+    
+    print(f"Top 3 models for permutaion importance: {top3_names}")
+
+    for name in top3_names:
+        print(f"\n---{name} permutaion importance ---")
+        print(importance_dict[name].to_string(index=False))
 if __name__ == "__main__":
     main()

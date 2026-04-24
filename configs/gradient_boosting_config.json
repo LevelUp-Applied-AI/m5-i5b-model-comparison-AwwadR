@@ -1,0 +1,100 @@
+{
+  "dataset": {
+    "filepath": "data/telecom_churn.csv",
+    "target": "churned",
+    "features": [
+      "tenure",
+      "monthly_charges",
+      "total_charges",
+      "num_support_calls",
+      "senior_citizen",
+      "has_partner",
+      "has_dependents",
+      "contract_months"
+    ],
+    "test_size": 0.2,
+    "random_state": 42,
+    "stratify": true
+  },
+  "cv": {
+    "n_splits": 5,
+    "shuffle": true,
+    "random_state": 42
+  },
+  "scoring": {
+    "primary_metric": "average_precision"
+  },
+  "output": {
+    "root_dir": "experiments"
+  },
+  "models": [
+    {
+      "name": "Dummy",
+      "type": "DummyClassifier",
+      "params": {
+        "strategy": "most_frequent"
+      },
+      "scaler": "passthrough"
+    },
+    {
+      "name": "LR_default",
+      "type": "LogisticRegression",
+      "params": {
+        "max_iter": 1000,
+        "random_state": 42
+      },
+      "scaler": "standard"
+    },
+    {
+      "name": "LR_balanced",
+      "type": "LogisticRegression",
+      "params": {
+        "class_weight": "balanced",
+        "max_iter": 1000,
+        "random_state": 42
+      },
+      "scaler": "standard"
+    },
+    {
+      "name": "DT_depth5",
+      "type": "DecisionTreeClassifier",
+      "params": {
+        "max_depth": 5,
+        "random_state": 42
+      },
+      "scaler": "passthrough"
+    },
+    {
+      "name": "RF_default",
+      "type": "RandomForestClassifier",
+      "params": {
+        "n_estimators": 100,
+        "max_depth": 10,
+        "random_state": 42
+      },
+      "scaler": "passthrough"
+    },
+    {
+      "name": "RF_balanced",
+      "type": "RandomForestClassifier",
+      "params": {
+        "n_estimators": 100,
+        "max_depth": 10,
+        "class_weight": "balanced",
+        "random_state": 42
+      },
+      "scaler": "passthrough"
+    },
+    {
+      "name": "GB",
+      "type": "GradientBoostingClassifier",
+      "param_grid": {
+        "n_estimators": [50, 100, 150],
+        "learning_rate": [0.1],
+        "max_depth": [3],
+        "random_state": [42]
+      },
+      "scaler": "passthrough"
+    }
+  ]
+}

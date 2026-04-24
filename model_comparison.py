@@ -31,10 +31,11 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import (PrecisionRecallDisplay, average_precision_score,
                              make_scorer, precision_score, recall_score,
                              f1_score, accuracy_score)
-from sklearn.model_selection import StratifiedKFold
+from sklearn.model_selection import StratifiedKFold, train_test_split
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 from sklearn.tree import DecisionTreeClassifier
+from sklearn.inspection import permutation_importance
 
 
 NUMERIC_FEATURES = ["tenure", "monthly_charges", "total_charges",
@@ -56,9 +57,15 @@ def load_and_preprocess(filepath="data/telecom_churn.csv", random_state=42):
         Tuple (X_train, X_test, y_train, y_test) where X contains only
         NUMERIC_FEATURES and y is the `churned` column.
     """
-    # TODO: Load the CSV, select NUMERIC_FEATURES into X, use `churned` as y,
-    #       split 80/20 with stratify=y.
-    pass
+    df = pd.read_csv(filepath)
+    X = df[NUMERIC_FEATURES]
+    y = df["churned"]
+
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=0.2, random_state=random_state, stratify=y
+    )
+
+    return X_train, X_test, y_train, y_test
 
 
 def define_models():
@@ -84,11 +91,33 @@ def define_models():
         Names: 'Dummy', 'LR_default', 'LR_balanced', 'DT_depth5',
                'RF_default', 'RF_balanced'.
     """
-    # TODO: Build a Pipeline for each model. LR pipelines include
-    #       StandardScaler; tree pipelines use 'passthrough' for the
-    #       scaler step. All models with randomness use random_state=42.
-    pass
-
+    models = {
+        "Dummy": Pipeline([
+            ("scaler", "passthrough"),
+            ("model", DummyClassifier(strategy="most_frequent"))
+        ]),
+        "LR_default": Pipeline([
+            ("scaler", StandardScaler()),
+            ("model", LogisticRegression(max_iter=1000, random_state=42))
+        ]),
+        "LR_balanced": Pipeline([
+            ("scaler", StandardScaler()),
+            ("model", LogisticRegression(class_weight="balanced", max_iter=1000, random_state=42))
+        ]),
+        "DT_depth5": Pipeline([
+            ("scaler", "passthrough"),
+            ("model", DecisionTreeClassifier(max_depth=5, random_state=42))
+        ]),
+        "RF_default": Pipeline([
+            ("scaler", "passthrough"),
+            ("model", RandomForestClassifier(n_estimators=100, max_depth=10, random_state=42))
+        ]),
+        "RF_balanced": Pipeline([
+            ("scaler", "passthrough"),
+            ("model", RandomForestClassifier(n_estimators=100, max_depth=10, class_weight="balanced", random_state=42))
+        ])
+    }
+    return models
 
 def run_cv_comparison(models, X, y, n_splits=5, random_state=42):
     """Run 5-fold stratified cross-validation on all models.
@@ -110,10 +139,47 @@ def run_cv_comparison(models, X, y, n_splits=5, random_state=42):
         f1_mean, f1_std, pr_auc_mean, pr_auc_std.
         One row per model (6 rows total).
     """
-    # TODO: Create a StratifiedKFold splitter. For each model, loop over
-    #       folds: fit on train, predict on val, compute the 5 metrics.
-    #       Collect fold scores, compute mean ± std. Return as DataFrame.
-    pass
+    skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=random_state)
+    rows = []
+    
+    for name, pipeline in models.items():
+        accuracy_scores = []
+        precision_scores = []
+        recall_scores = []
+        f1_scores = []
+        pr_auc_scores = []
+
+        for train_idx, val_idx in skf.split(X, y):
+            X_fold_train, X_fold_val = X.iloc[train_idx], X.iloc[val_idx]
+            y_fold_train, y_fold_val = y.iloc[train_idx], y.iloc[val_idx]
+
+            pipeline.fit(X_fold_train, y_fold_train)
+
+            y_pred = pipeline.predict(X_fold_val)
+            y_proba = pipeline.predict_proba(X_fold_val)[:, 1]
+
+            accuracy_scores.append(accuracy_score(y_fold_val, y_pred))
+            precision_scores.append(precision_score(y_fold_val, y_pred, zero_division=0))
+            recall_scores.append(recall_score(y_fold_val, y_pred, zero_division=0))
+            f1_scores.append(f1_score(y_fold_val, y_pred, zero_division=0))
+            pr_auc_scores.append(average_precision_score(y_fold_val, y_proba))
+        
+
+        rows.append({
+            "model": name,
+            "accuracy_mean": np.mean(accuracy_scores),
+            "accuracy_std": np.std(accuracy_scores),
+            "precision_mean": np.mean(precision_scores),
+            "precision_std": np.std(precision_scores),
+            "recall_mean": np.mean(recall_scores),
+            "recall_std": np.std(recall_scores),
+            "f1_mean": np.mean(f1_scores),
+            "f1_std": np.std(f1_scores),
+            "pr_auc_mean": np.mean(pr_auc_scores),
+            "pr_auc_std": np.std(pr_auc_scores),
+        })
+
+    return pd.DataFrame(rows)
 
 
 def save_comparison_table(results_df, output_path="results/comparison_table.csv"):
@@ -123,8 +189,7 @@ def save_comparison_table(results_df, output_path="results/comparison_table.csv"
         results_df: DataFrame from run_cv_comparison().
         output_path: Destination path.
     """
-    # TODO: Save results_df to CSV (with index=False).
-    pass
+    results_df.to_csv(output_path, index=False)
 
 
 def plot_pr_curves_top3(models, X_test, y_test, output_path="results/pr_curves.png"):
@@ -140,10 +205,21 @@ def plot_pr_curves_top3(models, X_test, y_test, output_path="results/pr_curves.p
         y_test: Test labels.
         output_path: Destination path for the PNG.
     """
-    # TODO: Compute PR-AUC for each model on the test set. Select the top 3.
-    #       Create a figure, plot each with PrecisionRecallDisplay.from_estimator
-    #       on the same axes. Title, save, close.
-    pass
+    scores = []
+    for name, model in models.items():
+        y_proba = model.predict_proba(X_test)[:, 1]
+        pr_auc = average_precision_score(y_test, y_proba)
+        scores.append((name, pr_auc))
+
+    top3 = sorted(scores, key=lambda x: x[1], reverse=True)[:3]
+
+    fig, ax = plt.subplots(figsize=(8, 6))
+    for name, _ in top3:
+        PrecisionRecallDisplay.from_estimator(models[name], X_test, y_test, ax=ax, name=name)
+    
+    ax.set_title("Precision-Recall Curves (Top 3 Models)")
+    plt.savefig(output_path, bbox_inches="tight")
+    plt.close()
 
 
 def plot_calibration_top3(models, X_test, y_test, output_path="results/calibration.png"):
@@ -157,9 +233,21 @@ def plot_calibration_top3(models, X_test, y_test, output_path="results/calibrati
         y_test: Test labels.
         output_path: Destination path for the PNG.
     """
-    # TODO: Same top 3 as PR curves. Create a figure, plot each with
-    #       CalibrationDisplay.from_estimator. Title, save, close.
-    pass
+    scores = []
+    for name, model in models.items():
+        y_proba = model.predict_proba(X_test)[:, 1]
+        pr_auc = average_precision_score(y_test, y_proba)
+        scores.append((name, pr_auc))
+    
+    top3 = sorted(scores, key=lambda x: x[1], reverse=True)[:3]
+
+    fig, ax = plt.subplots(figsize=(8, 6))
+    for name, _ in top3:
+        CalibrationDisplay.from_estimator(models[name], X_test, y_test, n_bins=10, ax=ax, name=name)
+    
+    ax.set_title("Calibration Curves (Top 3 Models)")
+    plt.savefig(output_path, bbox_inches="tight")
+    plt.close()
 
 
 def save_best_model(best_model, output_path="results/best_model.joblib"):
@@ -169,8 +257,7 @@ def save_best_model(best_model, output_path="results/best_model.joblib"):
         best_model: A fitted sklearn Pipeline.
         output_path: Destination path.
     """
-    # TODO: Call dump(best_model, output_path).
-    pass
+    dump(best_model, output_path)
 
 
 def log_experiment(results_df, output_path="results/experiment_log.csv"):
@@ -184,11 +271,19 @@ def log_experiment(results_df, output_path="results/experiment_log.csv"):
         results_df: DataFrame from run_cv_comparison().
         output_path: Destination path.
     """
-    # TODO: Build a log DataFrame with columns: model_name, accuracy,
-    #       precision, recall, f1, pr_auc (use the mean values from
-    #       results_df), and a timestamp column with the current time.
-    #       Save to CSV.
-    pass
+    timestamp = datetime.now().isoformat()
+
+    log_df = pd.DataFrame({
+        "model_name": results_df["model"],
+        "accuracy": results_df["accuracy_mean"],
+        "precision": results_df["precision_mean"],
+        "recall": results_df["recall_mean"],
+        "f1": results_df["f1_mean"],
+        "pr_auc": results_df["pr_auc_mean"],
+        "timestamp": timestamp
+    })
+
+    log_df.to_csv(output_path, index=False)
 
 
 def find_tree_vs_linear_disagreement(rf_model, lr_model, X_test, y_test,
@@ -222,12 +317,162 @@ def find_tree_vs_linear_disagreement(rf_model, lr_model, X_test, y_test,
           - prob_diff (float): |rf_proba - lr_proba|
           - true_label (int): 0 or 1
     """
-    # TODO: Get predict_proba from both pipelines on X_test. Compute
-    #       absolute difference of P(churn=1). Find the sample with the
-    #       MAXIMUM difference (must be >= min_diff). Return the dict
-    #       with all six fields.
-    pass
+    rf_proba = rf_model.predict_proba(X_test)[:, 1]
+    lr_proba = lr_model.predict_proba(X_test)[:, 1]
 
+    diffs = np.abs(rf_proba - lr_proba)
+    max_idx = np.argmax(diffs)
+
+    if diffs[max_idx] < min_diff:
+        return None
+    
+    sample_features = X_test.iloc[max_idx]
+    feature_values = {name: sample_features[name] for name in feature_names}
+
+    return {
+        "sample_idx": X_test.index[max_idx],
+        "feature_values": feature_values,
+        "rf_proba": float(rf_proba[max_idx]),
+        "lr_proba": float(lr_proba[max_idx]),
+        "prob_diff": float(diffs[max_idx]),
+        "true_label": int(y_test.iloc[max_idx])
+    }
+
+def threshold_optimization_for_deployment(model, X_test, y_test,
+                                          output_csv="results/threshold_sweep.csv",
+                                          output_plot="results/threshold_sweep.png"):
+    """
+    Sweep thresholds from 0.10 to 0.90 and compute precision, recall, F1,
+    alerts per 1000 customers, and expected alerts for a base of 10,000 customers.
+
+    Select the threshold that stays within Petra Telecom's monthly contact
+    capacity (150 out of 10,000 customers) while maximizing recall.
+    """
+    thresholds = np.arange(0.10, 0.91, 0.05)
+    y_proba = model.predict_proba(X_test)[:, 1]
+
+    rows = []
+
+    for threshold in thresholds:
+        y_pred = (y_proba >= threshold).astype(int)
+
+        precision = precision_score(y_test, y_pred, zero_division=0)
+        recall = recall_score(y_test, y_pred, zero_division=0)
+        f1 = f1_score(y_test, y_pred, zero_division=0)
+
+        positive_rate = y_pred.mean()
+        alerts_per_1000 = positive_rate * 1000
+        alerts_per_10000 = positive_rate * 10000
+
+        rows.append({
+            "threshold": round(threshold, 2),
+            "precision": precision,
+            "recall": recall,
+            "f1": f1,
+            "alerts_per_1000": alerts_per_1000,
+            "alerts_per_10000": alerts_per_10000
+        })
+
+    threshold_df = pd.DataFrame(rows)
+    threshold_df.to_csv(output_csv, index=False)
+
+    # Capacity rule: at most 150 contacts for 10,000 customers
+    eligible = threshold_df[threshold_df["alerts_per_10000"] <= 150]
+
+    if len(eligible) > 0:
+        best_row = eligible.sort_values(
+            ["recall", "f1", "precision"],
+            ascending=[False, False, False]
+        ).iloc[0]
+    else:
+        best_row = None
+
+    # Plot threshold vs metrics
+    plt.figure(figsize=(10, 6))
+    plt.plot(threshold_df["threshold"], threshold_df["precision"], label="Precision")
+    plt.plot(threshold_df["threshold"], threshold_df["recall"], label="Recall")
+    plt.plot(threshold_df["threshold"], threshold_df["f1"], label="F1")
+    plt.plot(threshold_df["threshold"], threshold_df["alerts_per_1000"], label="Alerts per 1000")
+    plt.xlabel("Threshold")
+    plt.ylabel("Metric value")
+    plt.title("Threshold Sweep for RF_default")
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+    plt.savefig(output_plot, bbox_inches="tight")
+    plt.close()
+
+    return threshold_df, best_row
+
+def permutation_importance_comparison(models, X_test, y_test, feature_names, output_path="results/permutation_importance.png"):
+    """
+    Compute premutation importance for top 3 models using test set,
+    Compare rankings, and save grouped bar chart for the top 8 features.
+    """
+    # Find top 3 models by PR-AUC on the best set
+    scores = []
+    for name, model in models.items():
+        y_proba = model.predict_proba(X_test)[:, 1]
+        pr_auc = average_precision_score(y_test, y_proba)
+        scores.append((name, pr_auc))
+    
+    top3 = sorted(scores, key=lambda x: x[1], reverse=True)[:3]
+    top3_names = [name for name, _ in top3]
+
+    importance_dict = {}
+
+    for name in top3_names:
+        result = permutation_importance(
+            models[name], 
+            X_test, y_test, 
+            n_repeats=10, 
+            random_state=42, 
+            scoring="average_precision"
+        )
+
+        importance_df = pd.DataFrame({
+            "feature": feature_names,
+            "importance_mean": result.importances_mean,
+            "importance_std": result.importances_std        
+        }).sort_values("importance_mean", ascending=False)
+
+        importance_dict[name] = importance_df
+    
+    # Get union of top 8 features across all 3 models
+    all_top_features = []
+    for name in top3_names:
+        all_top_features.extend(importance_dict[name]["feature"].head(8).tolist())
+    
+    top_features = list(dict.fromkeys(all_top_features))[:8]
+
+    plot_df = pd.DataFrame({"feature": top_features})
+
+    for name in top3_names:
+        plot_df = plot_df.merge(
+            importance_dict[name][["feature", "importance_mean"]],
+            on="feature",
+            how="left"
+        ).rename(columns={"importance_mean": name})
+    plot_df = plot_df.fillna(0)
+
+    # plot grouped bar chart
+    x = np.arange(len(plot_df))
+    width = 0.25
+
+    plt.figure(figsize=(12, 6))
+    plt.bar(x - width, plot_df[top3_names[0]], width=width, label=top3_names[0])
+    plt.bar(x, plot_df[top3_names[1]], width=width, label=top3_names[1])
+    plt.bar(x + width, plot_df[top3_names[2]], width=width, label=top3_names[2])
+    
+    plt.xticks(x, plot_df["feature"], rotation=45, ha="right")
+    plt.ylabel("Permutation Importance (mean drop in PR-AUC)")
+    plt.xlabel("Feature")
+    plt.title("Permutation Importance Comparison Across Top 3 Models")
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(output_path, bbox_inches="tight")
+    plt.close()
+
+    return top3_names, importance_dict, plot_df
 
 def main():
     """Orchestrate all 9 integration tasks. Run with: python model_comparison.py"""
@@ -327,6 +572,38 @@ def main():
     print("\n--- All results saved to results/ ---")
     print("Write your decision memo in the PR description (Task 10).")
 
+    # Tier 1: Threshold Optimization for Deployment
+    print("\n=== Tier 1: Threshold Optimization for Deployment ===")
+    threshold_df, best_threshold_row = threshold_optimization_for_deployment(
+        fitted_models[best_name], X_test, y_test
+    )
 
+    print(threshold_df.to_string(index=False))
+
+    if best_threshold_row is not None:
+        print("\nRecommended threshold under business capacity:")
+        print(f"  Threshold: {best_threshold_row['threshold']:.2f}")
+        print(f"  Precision: {best_threshold_row['precision']:.4f}")
+        print(f"  Recall: {best_threshold_row['recall']:.4f}")
+        print(f"  F1: {best_threshold_row['f1']:.4f}")
+        print(f"  Alerts per 1000: {best_threshold_row['alerts_per_1000']:.2f}")
+        print(f"  Alerts per 10000: {best_threshold_row['alerts_per_10000']:.2f}")
+    else:
+        print("\nNo threshold met the 150-per-10,000 contact limit.")
+
+    # Tier 2: Permutation Importance and Model Explanation
+    print("\n=== Tier 2: Permutation Importance and Model Explanation ===")
+    top3_names, importance_dict, plot_fd = permutation_importance_comparison(
+        fitted_models,
+        X_test,
+        y_test,
+        NUMERIC_FEATURES
+    )
+    
+    print(f"Top 3 models for permutaion importance: {top3_names}")
+
+    for name in top3_names:
+        print(f"\n---{name} permutaion importance ---")
+        print(importance_dict[name].to_string(index=False))
 if __name__ == "__main__":
     main()
